@@ -37,6 +37,16 @@ YOU_COLOR = "\u001b[94m"
 ASSISTANT_COLOR = "\u001b[93m"
 RESET_COLOR = "\u001b[0m"
 
+TRACE_FILE = Path("trace.md")
+
+def trace(text: str = ""):
+    print(text)
+    with TRACE_FILE.open("a", encoding="utf-8") as f:
+        f.write(text + "\n")
+
+def split_thought(text: str) -> str:
+    return "\n".join(l for l in text.splitlines() if not l.strip().startswith("tool:")).strip()
+
 def resolve_abs_path(path_str: str) -> Path:
     """
     file.py -> /Users/home/mihail/modern-software-dev-lectures/file.py
@@ -53,7 +63,6 @@ def read_file_tool(filename: str) -> Dict[str, Any]:
     :return: The full content of the file.
     """
     full_path = resolve_abs_path(filename)
-    print(full_path)
     with open(str(full_path), "r") as f:
         content = f.read()
     return {
@@ -159,10 +168,14 @@ def execute_llm_call(conversation: List[Dict[str, str]]):
         messages=conversation,
         max_completion_tokens=2000
     )
-    return response.choices[0].message.content
+    choice = response.choices[0]
+    trace(f"_finish_reason={choice.finish_reason}, completion_tokens={response.usage.completion_tokens}_\n")
+    return choice.message.content
 
 def run_coding_agent_loop():
-    print(get_full_system_prompt())
+    TRACE_FILE.write_text("", encoding="utf-8")
+    trace("## System prompt\n\n```\n" + get_full_system_prompt() + "\n```")
+    iteration = 0
     conversation = [{
         "role": "system",
         "content": get_full_system_prompt()
@@ -176,11 +189,16 @@ def run_coding_agent_loop():
             "role": "user",
             "content": user_input.strip()
         })
+        trace(f"\n## User\n\n{user_input.strip()}")
         while True:
-            assistant_response = execute_llm_call(conversation)
+            iteration += 1
+            trace(f"\n### Iteração {iteration}")
+            assistant_response = execute_llm_call(conversation) or ""
             tool_invocations = extract_tool_invocations(assistant_response)
+            trace("**Resposta bruta do LLM:**\n\n```\n" + assistant_response + "\n```\n")
+            trace("**Thought:**\n\n" + (split_thought(assistant_response) or "(vazio)") + "\n")
             if not tool_invocations:
-                print(f"{ASSISTANT_COLOR}Assistant:{RESET_COLOR}: {assistant_response}")
+                trace("**Action:** nenhuma tool reconhecida pelo parser -> resposta final, loop interno para.\n")
                 conversation.append({
                     "role": "assistant",
                     "content": assistant_response
@@ -189,7 +207,7 @@ def run_coding_agent_loop():
             for name, args in tool_invocations:
                 tool = TOOL_REGISTRY[name]
                 resp = ""
-                print(name, args)
+                trace(f"**Action:** `{name}({json.dumps(args, ensure_ascii=False)})`\n")
                 if name == "read_file":
                     resp = tool(args.get("filename", "."))
                 elif name == "list_files":
@@ -198,9 +216,11 @@ def run_coding_agent_loop():
                     resp = tool(args.get("path", "."),
                                 args.get("old_str", ""),
                                 args.get("new_str", ""))
+                observation = f"tool_result({json.dumps(resp)})"
+                trace("**Observation** (mensagem role=user anexada à conversa):\n\n```\n" + observation + "\n```\n")
                 conversation.append({
                     "role": "user",
-                    "content": f"tool_result({json.dumps(resp)})"
+                    "content": observation
                 })
 
 
